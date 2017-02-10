@@ -23,7 +23,7 @@ This plugin uses Java OpenStack Storage(JOSS) library.
 
 ### With authentication
 
-if you want to use Swift with authentication (keystone, tempauth or basic)
+if you want to use Swift with authentication (keystone, tempauth or basic),
 
 - **auth_type**: Authentication type. you can choose "tempauth", "keystone", or "basic". (string, required)
 - **username**: username for accessing the object storage (string, required)
@@ -42,6 +42,8 @@ if you want to use Swift without authentication,
 
 ## Example
 
+Using tempauth:
+
 ```yaml
 in:
   type: swift
@@ -55,6 +57,19 @@ in:
     type: csv
 ```
 
+No authentication:
+
+```yaml
+in:
+  type: swift
+  auth_type: noauth
+  endpoint_url: http://localhost:8080/v1
+  account: account000
+  container: embulk_input
+  path_prefix: data
+  parser:
+    type: csv
+```
 
 ## Build
 
