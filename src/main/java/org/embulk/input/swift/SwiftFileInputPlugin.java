@@ -44,13 +44,16 @@ public class SwiftFileInputPlugin
   public interface PluginTask
       extends FileList.Task, Task {
     @Config("username")
-    public String getUsername();
+    @ConfigDefault("null")
+    public Optional<String> getUsername();
 
     @Config("password")
-    public String getPassword();
+    @ConfigDefault("null")
+    public Optional<String> getPassword();
 
     @Config("auth_url")
-    public String getAuthUrl();
+    @ConfigDefault("null")
+    public Optional<String> getAuthUrl();
 
     @Config("auth_type")
     public String getAuthType();
@@ -62,6 +65,15 @@ public class SwiftFileInputPlugin
     @Config("tenant_name")
     @ConfigDefault("null")
     public Optional<String> getTenantName();
+
+    @Config("endpoint_url")
+    @ConfigDefault("null")
+    public Optional<String> getEndpointUrl();
+
+    @Config("account")
+    @ConfigDefault("null")
+    public Optional<String> getAccount();
+
 
     @Config("container")
     public String getContainer();
@@ -86,7 +98,7 @@ public class SwiftFileInputPlugin
   }
 
   /**
-   * Logger
+   * Logger.
    */
   private static final Logger LOGGER = Exec.getLogger(SwiftFileInputPlugin.class);
 
@@ -94,9 +106,21 @@ public class SwiftFileInputPlugin
     AccountConfig accountConfig = new AccountConfig();
 
     final String authType = task.getAuthType();
-    accountConfig.setAuthUrl(task.getAuthUrl());
-    accountConfig.setUsername(task.getUsername());
-    accountConfig.setPassword(task.getPassword());
+
+    Optional<String> authUrl = task.getAuthUrl();
+    if (authUrl.isPresent()) {
+      accountConfig.setAuthUrl(authUrl.get());
+    }
+
+    Optional<String> username = task.getUsername();
+    if (username.isPresent()) {
+      accountConfig.setUsername(username.get());
+    }
+
+    Optional<String> password = task.getPassword();
+    if (password.isPresent()) {
+      accountConfig.setPassword(password.get());
+    }
 
     Optional<String> tenantId = task.getTenantId();
     if (tenantId.isPresent()) {
@@ -107,31 +131,63 @@ public class SwiftFileInputPlugin
       accountConfig.setTenantName(tenantName.get());
     }
 
+    Optional<String> endpointUrl = task.getEndpointUrl();
+    Optional<String> account = task.getAccount();
+
     switch (authType) {
       case "keystone":
-        if (!tenantId.isPresent() && !tenantName.isPresent()) {
+        if (authUrl.isPresent() && username.isPresent() && password.isPresent()) {
+          if (tenantId.isPresent() || tenantName.isPresent()) {
+            accountConfig.setAuthenticationMethod(AuthenticationMethod.KEYSTONE);
+          } else {
+            throw new ConfigException("if you choose keystone auth, "
+                + "you must specify to either tenant_id or tenant_name.");
+          }
+        } else {
           throw new ConfigException("if you choose keystone auth, "
-              + "you must specify to either tenant_id or tenant_name.");
+              + "you must specify auth_url, username and password.");
         }
-        accountConfig.setAuthenticationMethod(AuthenticationMethod.KEYSTONE);
         break;
       case "tempauth":
-        accountConfig.setAuthenticationMethod(AuthenticationMethod.TEMPAUTH);
+        if (authUrl.isPresent() && username.isPresent() && password.isPresent()) {
+          accountConfig.setAuthenticationMethod(AuthenticationMethod.TEMPAUTH);
+        } else {
+          throw new ConfigException("if you choose tempauth, "
+              + "you must specify auth_url, username and password.");
+        }
         break;
       case "basic":
-        accountConfig.setAuthenticationMethod(AuthenticationMethod.BASIC);
+        if (authUrl.isPresent() && username.isPresent() && password.isPresent()) {
+          accountConfig.setAuthenticationMethod(AuthenticationMethod.BASIC);
+        } else {
+          throw new ConfigException("if you choose basic auth, "
+              + "you must specify auth_url, username and password.");
+        }
+        break;
+      case "noauth":
+        if (endpointUrl.isPresent() && account.isPresent()) {
+          accountConfig.setAuthenticationMethod(AuthenticationMethod.EXTERNAL);
+          accountConfig.setAuthUrl(endpointUrl.get()); // in JOSS, AuthUrl is necessary.(NPE if no AuthUrl)
+          accountConfig.setAccessProvider(
+              new JossNoauthAccessProvider(endpointUrl.get(), account.get())
+          );
+        } else {
+          throw new ConfigException("if you choose noauth, "
+              + "you must specify endpoint_url and account.");
+        }
         break;
       default:
-        throw new ConfigException("auth_type has to be either keystone, tempauth or basic.");
+        throw new ConfigException("auth_type has to be either "
+            + "keystone, tempauth, basic or noauth.");
     }
 
     return new AccountFactory(accountConfig).createAccount();
   }
 
   /**
-   * retrieve target objects with specified prefix
+   * retrieve target objects with specified prefix.
    *
-   * @param task PluginTsak
+   * @param task PluginTask
    * @return List of Target Objects
    */
   private FileList listFiles(PluginTask task) {
@@ -140,7 +196,7 @@ public class SwiftFileInputPlugin
     Container container = account.getContainer(task.getContainer());
 
     // if the container is not exist, cannot input.
-    if (container.exists() == false) {
+    if (!container.exists()) {
       throw new ConfigException("Container not found");
     }
 
@@ -240,8 +296,9 @@ public class SwiftFileInputPlugin
                   @Override
                   public InputStream call() throws InterruptedIOException {
                     LOGGER.warn(
-                        String.format("Swift read failed. Retrying GET request with %,d bytes offset",
-                            offset), closedCause);
+                        String.format(
+                            "Swift read failed. Retrying GET request with %,d bytes offset", offset
+                        ), closedCause);
                     return obj.downloadObjectAsInputStream(
                         new DownloadInstructions().setRange(new ExcludeStartRange((int) offset))
                     );
@@ -255,8 +312,10 @@ public class SwiftFileInputPlugin
                   @Override
                   public void onRetry(Exception exception, int retryCount, int retryLimit, int retryWait)
                       throws RetryExecutor.RetryGiveupException {
-                    String message = String.format("Swift GET request failed. Retrying %d/%d after %d seconds. Message: %s",
-                        retryCount, retryLimit, retryWait / 1000, exception.getMessage());
+                    String message = String.format(
+                        "Swift GET request failed. Retrying %d/%d after %d seconds. Message: %s",
+                        retryCount, retryLimit, retryWait / 1000, exception.getMessage()
+                    );
                     if (retryCount % 3 == 0) {
                       LOGGER.warn(message, exception);
                     } else {
@@ -315,7 +374,10 @@ public class SwiftFileInputPlugin
         return null;
       }
       StoredObject obj = this.account.getContainer(this.containerName).getObject(iterator.next());
-      return new ResumableInputStream(obj.downloadObjectAsInputStream(), new SwiftInputStreamReopener(obj));
+
+      return new ResumableInputStream(
+          obj.downloadObjectAsInputStream(), new SwiftInputStreamReopener(obj)
+      );
     }
 
     @Override
